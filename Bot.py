@@ -16,8 +16,28 @@ import logging
 import datetime
 import requests
 import qrcode
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from io import BytesIO
 from dotenv import load_dotenv
+
+# --- FAKE WEB SERVER FOR RENDER FREE (so it doesn't show "port not open") ---
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"Bot is alive!")
+
+def start_health_server():
+    try:
+        port = int(os.getenv("PORT", "10000"))
+        server = HTTPServer(("0.0.0.0", port), HealthHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        print(f"Health server started on port {port}")
+    except Exception as e:
+        print(f"Health server failed: {e}")
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -32,6 +52,7 @@ load_dotenv()
 # --- CONFIG ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_IDS = [int(x.strip()) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()]
+# Leave empty = no admin needed
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip()  # e.g. https://your-app.onrender.com
 PORT = int(os.getenv("PORT", "10000"))
 DEFAULT_CITY = os.getenv("WEATHER_DEFAULT_CITY", "Enugu")
@@ -52,7 +73,11 @@ cur.execute("CREATE TABLE IF NOT EXISTS todos (id INTEGER PRIMARY KEY AUTOINCREM
 cur.execute("CREATE TABLE IF NOT EXISTS afk (user_id INTEGER PRIMARY KEY, reason TEXT, since TEXT)")
 conn.commit()
 
-def is_admin(user_id): return user_id in ADMIN_IDS
+def is_admin(user_id):
+    # If no ADMIN_IDS set, everyone is admin (you said you don't want admin)
+    if not ADMIN_IDS:
+        return True
+    return user_id in ADMIN_IDS
 def is_group_admin(update: Update):
     # for group commands, check if bot user is admin or sender is admin
     if update.effective_chat.type == "private":
@@ -659,9 +684,11 @@ async def remind(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"⏰ I'll remind you in {time_str}: {msg}")
 
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("Admin only")
-        return
+    # No admin needed - anyone can broadcast now
+    # if not is_admin(update.effective_user.id):
+    #     await update.message.reply_text("Admin only")
+    #     return
+    pass
     if not context.args:
         await update.message.reply_text("Use: /broadcast message")
         return
@@ -775,6 +802,8 @@ def main():
             webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}"
         )
     else:
+        # Start fake web server so Render free web service stays happy
+        start_health_server()
         app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
